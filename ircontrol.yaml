@@ -1,0 +1,114 @@
+esphome:
+  name: ir-remote
+  platform: ESP8266
+  board: d1_mini
+
+  includes:
+    - electra_climate.h
+
+globals:
+  - id: last_ac_temperature
+    type: float
+    restore_value: no
+  - id: last_ac_state
+    type: bool
+    restore_value: no
+  - id: last_ac_fanmode
+    type: int
+    restore_value: no
+    
+remote_receiver:
+  id: ir_receiver
+  pin: 
+    number: D4
+    inverted: yes
+    mode: INPUT_PULLUP
+  dump: raw
+  tolerance: 40%
+  filter: 200us
+  on_raw:
+    then:
+      - lambda: '((ElectraDamperClimate*) App.get_climates()[0])->on_receive(x);' 
+      
+
+remote_transmitter:
+  id: remote_send
+  pin: D3
+  carrier_duty_percent: 50%
+
+# Enable logging
+logger:
+  level: DEBUG
+
+# Enable Home Assistant API
+api:
+  password: "hello"
+  services:
+    - service: send_raw
+      variables:
+        keycode: int[]
+        freq: float
+      then:
+      - remote_transmitter.transmit_raw:
+          code: !lambda 'return keycode;'
+          carrier_frequency: !lambda 'return freq;'
+    - service: set_target_temperature
+      variables:
+        target_temperature: float
+        turn_on: bool
+        fan_mode: int
+      then:
+      - remote_transmitter.transmit_raw:
+          code: !lambda 'return ElectraDamperRemoteAction(0, turn_on, target_temperature, (FanMode)fan_mode).getCodes();'
+          carrier_frequency: 38kHz
+    - service: update_current_temperature
+      variables:
+        current_temperature: float
+      then:
+        - lambda: '((ElectraDamperClimate*) App.get_climates()[0])->set_current_temperature(current_temperature);'
+    
+ota:
+  password: ""
+
+wifi:
+  ssid: "TP-Link_0D55"
+  password: "*********"
+  power_save_mode: none
+  reboot_timeout: 0s
+  
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "ir-remote"
+    password: "zQicje4Ld6Bu"
+
+text_sensor:
+  - platform: template
+    name: "AC State"
+    id: ac_state
+
+  - platform: template
+    name: "AC Fan Mode"
+    id: ac_fanmode  
+
+sensor:
+  - platform: template
+    name: "AC Target Temperature"
+    id: ac_target_temperature
+
+climate:
+  - platform: custom
+    lambda: |-
+      auto electraClimate = new ElectraDamperClimate();
+      electraClimate->set_transmitter(id(remote_send));
+      App.register_component(electraClimate);
+      return {electraClimate};
+    
+    climates:
+      - name: "AC Damper Control"
+        id: ac_climate
+        visual:
+          min_temperature: 15
+          max_temperature: 30
+          temperature_step: 1
+    
+captive_portal:
