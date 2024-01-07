@@ -2,7 +2,7 @@
 #include "esphome.h"
 #include <bitset>
 
-enum FanMode { FAN_LOW, FAN_MEDIUM, FAN_HIGH, FAN_AUTO };
+enum FanMode { FAN_LOW, FAN_HIGH, FAN_MEDIUM, FAN_AUTO };
 
 class ElectraDamperRemoteAction {    
     private:
@@ -16,18 +16,18 @@ class ElectraDamperRemoteAction {
     	bool turnOn = true;
     	int temperature = 22;
     	FanMode fanMode = FAN_AUTO;	
-    	int extra = 0b111;
+    	int extra = 0b110;
     	bool valid = true;
 
 	public:
 		ElectraDamperRemoteAction() {
 		}
-		ElectraDamperRemoteAction(int channelId, bool turnOn, int temperature, FanMode fanMode) {
+		ElectraDamperRemoteAction(int channelId, bool turnOn, int temperature, FanMode fanMode, int extra = 0b110) {
 				this->channelId = channelId;
 				this->turnOn = turnOn;
 				this->temperature = temperature;
 				this->fanMode = fanMode;
-				this->extra = 0b111;
+				this->extra = extra;
 				valid = true;
 		}
 		
@@ -105,65 +105,71 @@ class ElectraDamperRemoteAction {
                   }
               }
               if (valid) {
+                  ESP_LOGD("ElectraDamperRemoteAction", "Received Valid IR Signal: %s", binValue);
                   this->valid = true;
-                  //ESP_LOGD("ir", "%s", binValue);
-                  // extract fan mode
-                  if (binValue[6] == '0' && binValue[7] == '0') {
-                      this->fanMode = FAN_LOW;
-                  } else if (binValue[6] == '0' && binValue[7] == '1') {
-                      this->fanMode = FAN_HIGH;
-                  } else if (binValue[6] == '1' && binValue[7] == '0') {
-                      this->fanMode = FAN_MEDIUM;
-                  } else {
-                      this->fanMode = FAN_AUTO;
-                  }
                   
-                  // extract ac state
+                  // extract channelId (bits 0-2)
+                  int channelId = 0;
+                  for (int i = 0; i<=2;++i) {
+                    if (binValue[i] == '1') channelId += (1 << i);
+                  }  
+                  this->channelId = channelId;
+
+                  // extract extra value (bits 3-5)
+                  int extra = 0;
+                  for (int i = 3; i <= 5; ++i) {
+                    if (binValue[i] == '1') extra += (1 << (i - 3));
+                  }
+                  this->extra = extra;
+                  
+                  // extract fan mode (bits 6-7)
+                  int fanBits = (binValue[6] - '0') * 2 + (binValue[7] - '0');
+                  this->fanMode = static_cast<FanMode>(fanBits);
+
+                  switch (fanBits) {
+                        case 0:
+                            this->fanMode = FAN_LOW;
+                            break;
+                        case 1:
+                            this->fanMode = FAN_HIGH;
+                            break;
+                        case 2:
+                            this->fanMode = FAN_MEDIUM;
+                            break;
+                        default:
+                            this->fanMode = FAN_AUTO;
+                            break;
+                  }
+
+                  // extract temperature (bits 8 - 12)
+                  float temp = 5;
+                  for (int i = 8; i<=12;++i) {
+                    if (binValue[i] == '1') temp += (1 << (i - 8));
+                  }                                    
+                  this->temperature = temp;
+                  
+                  // bit 13 is always 1
+
+                  // extract ac state (bit 14)
                   if (binValue[14]=='1') {
                     turnOn = true;
                   } else {
                     turnOn = false;
                   }
-                  
-                  // extract temperature
-                  float temp = 5;
-                  if (binValue[8]=='1') temp+=1;
-                  if (binValue[9]=='1') temp+=2;
-                  if (binValue[10]=='1') temp+=4;
-                  if (binValue[11]=='1') temp+=8;
-                  if (binValue[12]=='1') temp+=16;
-                  this->temperature = temp;
-                  
-                  // extract channelId 
-                  int channelId = 0;
-                  if (binValue[0]=='1') channelId+=1;
-                  if (binValue[1]=='1') channelId+=2;
-                  if (binValue[2]=='1') channelId+=4;
-                  this->channelId = channelId;
-                  
-                  // extract extra value
-                  int extra = 0;
-                  if (binValue[0]=='1') extra+=1;
-                  if (binValue[1]=='1') extra+=2;
-                  if (binValue[2]=='1') extra+=4;
-                  this->extra = extra;
-                  
               }
               else {
                   this->valid = false;
-				  // invalid sequence
-                  //ESP_LOGD("ir", "invalid sequence");
               }
           } else {
               this->valid = false;
-			  // unknown signal
-              //ESP_LOGD("ir", "unknown signal");
           }
 		}
 		
 		std::vector<int> getCodes() {
             bool parity = false;
             std::vector<int> codes;
+            static char strValue[17];
+            strValue[16]='\0';
             
             for(int j=0; j<3; j++) {
                 codes.push_back(START_VAL);
@@ -171,7 +177,8 @@ class ElectraDamperRemoteAction {
                 
                 // channel id
                 auto channelIdBits = std::bitset<3>(channelId);
-                for(int i=0; i<3; i++) {
+                for(int i=0; i<3; i++) {                    
+                    strValue[i] = channelIdBits[i] + '0';
                     if (channelIdBits[i]==1) {
                         codes.push_back(ZERO_VAL);
                         codes.push_back(-ONE_VAL);
@@ -185,7 +192,8 @@ class ElectraDamperRemoteAction {
                 // extra bits
                 auto extraBits = std::bitset<3>(extra);
                 for(int i=0; i<3; i++) {
-                    if (extraBits[i]==1) {
+                    strValue[3+i] = extraBits[i] + '0';
+                    if (extraBits[i]==1) {                        
                         if (parity) { parity = false; } else {parity = true;};
                         codes.push_back(ZERO_VAL);
                         codes.push_back(-ONE_VAL);
@@ -196,14 +204,18 @@ class ElectraDamperRemoteAction {
                 }
                 
                 // fan mode
-                switch(fanMode) {
+                switch(fanMode) {                    
                     case FAN_LOW:
+                        strValue[6] = '1';
+                        strValue[7] = '0';
                         codes.push_back(ZERO_VAL);
                         codes.push_back(-ZERO_VAL);
                         codes.push_back(ZERO_VAL);
                         codes.push_back(-ZERO_VAL);
                         break;
                     case FAN_HIGH:
+                        strValue[6] = '1';
+                        strValue[7] = '0';
                         codes.push_back(ZERO_VAL);
                         codes.push_back(-ZERO_VAL);
                         codes.push_back(ZERO_VAL);
@@ -211,6 +223,8 @@ class ElectraDamperRemoteAction {
                         if (parity) { parity = false; } else {parity = true;};
                         break;
                     case FAN_MEDIUM:
+                        strValue[6] = '0';
+                        strValue[7] = '1';
                         codes.push_back(ZERO_VAL);
                         codes.push_back(-ONE_VAL);
                         codes.push_back(ZERO_VAL);
@@ -218,6 +232,8 @@ class ElectraDamperRemoteAction {
                         if (parity) { parity = false; } else {parity = true;};
                         break;
                     default:
+                        strValue[6] = '1';
+                        strValue[7] = '1';
                         codes.push_back(ZERO_VAL);
                         codes.push_back(-ONE_VAL);
                         codes.push_back(ZERO_VAL);
@@ -225,8 +241,9 @@ class ElectraDamperRemoteAction {
                 }
                 
                 // temp bits
-                auto tempBits = std::bitset<6>(temperature-5);
-                for(int i=0; i<6; i++) {
+                auto tempBits = std::bitset<5>(temperature-5);
+                for(int i=0; i<5; i++) {
+                    strValue[8+i] = tempBits[i] + '0';
                     if (tempBits[i]==1) {
                         if (parity) { parity = false; } else {parity = true;};
                         codes.push_back(ZERO_VAL);
@@ -236,29 +253,41 @@ class ElectraDamperRemoteAction {
                         codes.push_back(-ZERO_VAL);
                     }
                 }
-                
+
+                // push static '1'
+                strValue[13] = '1';
+                codes.push_back(ZERO_VAL);
+                codes.push_back(-ONE_VAL);
+                if (parity) { parity = false; } else {parity = true;};
+
                 // on/off
                 if (turnOn) {
+                    strValue[14] = '1';
                     codes.push_back(ZERO_VAL);
                     codes.push_back(-ONE_VAL);
                     if (parity) { parity = false; } else {parity = true;};
                 } else {
+                    strValue[14] = '0';
                     codes.push_back(ZERO_VAL);
                     codes.push_back(-ZERO_VAL);
                 }
                 
                 // parity bit
                 if (parity) {
+                    strValue[15] = '1';
                     codes.push_back(ZERO_VAL);
                     codes.push_back(-ONE_VAL);
                 } else {
+                    strValue[15] = '0';
                     codes.push_back(ZERO_VAL);
                     codes.push_back(-ZERO_VAL);
                 }
             }
             
-            codes.push_back(END_VAL);
-			
+            codes.push_back(END_VAL);			                                    
+
+            ESP_LOGD("ElectraDamperRemoteAction", "Sent IR Signal: %s", strValue);
+
             return codes;
         }
 
@@ -288,6 +317,11 @@ class ElectraDamperClimate : public Component, public Climate {
 
 	public:
 		void setup() override {
+			auto call = make_call();
+			call.set_fan_mode("AUTO");
+			call.set_mode("OFF");
+			call.set_target_temperature(24);
+			call.perform();
 		}
 
 		void on_receive(std::vector<int> codes) {
@@ -309,54 +343,56 @@ class ElectraDamperClimate : public Component, public Climate {
 					last_remote_state.setTemperature(action.getTemperature());
 					last_remote_state.setOn(action.isOn());
 					last_remote_state.setFanMode(action.getFanMode());
+                    last_remote_state.setExtra(action.getExtra());
 					
 					last_ac_full_state.setChannelId(action.getChannelId());
 					last_ac_full_state.setTemperature(action.getTemperature());
 					last_ac_full_state.setOn(action.isOn());
 					last_ac_full_state.setFanMode(action.getFanMode());
-				}
+                    last_ac_full_state.setExtra(action.getExtra());
 
-				auto call = id(ac_climate).make_call();
-				// set fan mode
-				switch(action.getFanMode()) {
-				   case FanMode::FAN_LOW :
-					  call.set_fan_mode("LOW");
-					  id(ac_fanmode).publish_state("low");
-					  break; 
-				   case FanMode::FAN_MEDIUM :
-					  call.set_fan_mode("MEDIUM");
-					  id(ac_fanmode).publish_state("medium");
-					  break; 
-				   case FanMode::FAN_HIGH :
-					  call.set_fan_mode("HIGH");
-					  id(ac_fanmode).publish_state("high");
-					  break; 
-				   default : 
-					  call.set_fan_mode("AUTO");
-					  id(ac_fanmode).publish_state("auto");
-				}
+                    auto call = make_call();
+                    // set fan mode
+                    switch(action.getFanMode()) {
+                    case FanMode::FAN_LOW :
+                        call.set_fan_mode("LOW");
+                        //id(ac_fanmode).publish_state("low");
+                        break; 
+                    case FanMode::FAN_MEDIUM :
+                        call.set_fan_mode("MEDIUM");
+                        //id(ac_fanmode).publish_state("medium");
+                        break; 
+                    case FanMode::FAN_HIGH :
+                        call.set_fan_mode("HIGH");
+                        //id(ac_fanmode).publish_state("high");
+                        break; 
+                    default : 
+                        call.set_fan_mode("AUTO");
+                        //id(ac_fanmode).publish_state("auto");
+                    }
 
-				// extract ac state
-				if (action.isOn()) {
-				  id(ac_state).publish_state("on");
-				  call.set_mode("AUTO");
-				} else {
-				  id(ac_state).publish_state("off");
-				  call.set_mode("OFF");
-				}
+                    // extract ac state
+                    if (action.isOn()) {
+                    //id(ac_state).publish_state("on");
+                    call.set_mode("AUTO");
+                    } else {
+                    //id(ac_state).publish_state("off");
+                    call.set_mode("OFF");
+                    }
 
-				// extract temperature
-				float temp = action.getTemperature();
-				call.set_target_temperature(temp);
-				id(ac_target_temperature).publish_state(temp);
-				call.perform();
+                    // extract temperature
+                    float temp = action.getTemperature();
+                    call.set_target_temperature(temp);
+                    //id(ac_target_temperature).publish_state(temp);
+                    call.perform();				
 
-				// re-transmit the updated state
-				id(last_ac_temperature) = temp;
-				id(last_ac_state) = action.isOn();
-				id(last_ac_fanmode) = (int) action.getFanMode();
+				    // re-transmit the updated state
+				    id(last_ac_temperature) = temp;
+				    id(last_ac_state) = action.isOn();
+				    id(last_ac_fanmode) = (int) action.getFanMode();
+                }
 			} else {
-				ESP_LOGD("ir", "on_receive: unknown sequence, starting with %d", codes[0]);
+				//ESP_LOGD("ir", "on_receive: unknown sequence, starting with %d", codes[0]);
 			}
 		}
 		  
@@ -390,7 +426,7 @@ class ElectraDamperClimate : public Component, public Climate {
 			else if (this->fan_mode == CLIMATE_FAN_HIGH)    fanMode = FanMode::FAN_HIGH;
 			else fanMode = FanMode::FAN_AUTO;
 
-			auto action = ElectraDamperRemoteAction(0,  this->mode != CLIMATE_MODE_OFF, (int)this->target_temperature, fanMode);
+			auto action = ElectraDamperRemoteAction(0,  this->mode != CLIMATE_MODE_OFF, (int)this->target_temperature, fanMode, last_ac_full_state.getExtra());
 			
 			// update AC last state
 			last_ac_full_state.setChannelId(action.getChannelId());
