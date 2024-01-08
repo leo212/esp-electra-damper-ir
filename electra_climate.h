@@ -428,16 +428,19 @@ class ElectraDamperClimate : public Component, public Climate {
 
 			auto action = ElectraDamperRemoteAction(0,  this->mode != CLIMATE_MODE_OFF, (int)this->target_temperature, fanMode, last_ac_full_state.getExtra());
 			
-			// update AC last state
-			last_ac_full_state.setChannelId(action.getChannelId());
-			last_ac_full_state.setTemperature(action.getTemperature());
-			last_ac_full_state.setOn(action.isOn());
-			last_ac_full_state.setFanMode(action.getFanMode());
-			
-			auto transmit = this->transmitter->transmit();
-			transmit.get_data()->set_data(action.getCodes());
-			transmit.get_data()->set_carrier_frequency(38000);
-			transmit.perform();			
+			// if the state is different from the last state - transmit it
+            if (!action.isLike(last_ac_full_state)) {                
+                // update AC last state            
+                last_ac_full_state.setChannelId(action.getChannelId());
+                last_ac_full_state.setTemperature(action.getTemperature());
+                last_ac_full_state.setOn(action.isOn());
+                last_ac_full_state.setFanMode(action.getFanMode());
+                
+                auto transmit = this->transmitter->transmit();
+                transmit.get_data()->set_data(action.getCodes());
+                transmit.get_data()->set_carrier_frequency(38000);
+                transmit.perform();		
+            }			
 		}
 
 		ClimateTraits traits() override {
